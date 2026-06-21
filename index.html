@@ -1,9 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>3D Racing Game with PeerJS</title>
+  <title>3D Racing Game + PeerJS Multiplayer</title>
   <style>
     body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: sans-serif; }
     #ui {
@@ -24,260 +23,269 @@
 
 <!-- Three.js -->
 <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-<!-- Simple OrbitControls for camera -->
 <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+
 <!-- PeerJS -->
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
 <script>
-  // ====== BASIC THREE.JS SETUP ======
-  const canvas = document.getElementById('c');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
+/* ============================================================
+   THREE.JS SETUP
+============================================================ */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
 
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x202030);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x202030);
 
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.set(0, 15, 25);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 15, 25);
 
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0, 0);
-  controls.update();
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 0);
+controls.update();
 
-  // Lights
-  const ambient = new THREE.AmbientLight(0xffffff, 0.4);
-  scene.add(ambient);
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  dirLight.position.set(10, 20, 10);
-  scene.add(dirLight);
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(10, 20, 10);
+scene.add(dirLight);
 
-  // Track (simple loop)
-  const trackGroup = new THREE.Group();
-  scene.add(trackGroup);
-
+// Track
+function createTrack() {
   const trackMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
   const borderMaterial = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
 
-  function createTrack() {
-    // Simple rectangular loop
-    const segments = [
-      { x: 0, z: -20, w: 20, h: 4 },
-      { x: 20, z: 0, w: 4, h: 40 },
-      { x: 0, z: 20, w: 20, h: 4 },
-      { x: -20, z: 0, w: 4, h: 40 },
-    ];
-    segments.forEach(s => {
-      const geo = new THREE.BoxGeometry(s.w, 0.5, s.h);
-      const mesh = new THREE.Mesh(geo, trackMaterial);
-      mesh.position.set(s.x, 0, s.z);
-      trackGroup.add(mesh);
-    });
+  const segments = [
+    { x: 0, z: -20, w: 20, h: 4 },
+    { x: 20, z: 0, w: 4, h: 40 },
+    { x: 0, z: 20, w: 20, h: 4 },
+    { x: -20, z: 0, w: 4, h: 40 },
+  ];
 
-    // Borders
-    segments.forEach(s => {
-      const geo = new THREE.BoxGeometry(s.w + 1, 1, s.h + 1);
-      const mesh = new THREE.Mesh(geo, borderMaterial);
-      mesh.position.set(s.x, 0.5, s.z);
-      mesh.scale.set(1.02, 1, 1.02);
-      mesh.material.wireframe = true;
-      trackGroup.add(mesh);
-    });
-
-    // Ground
-    const groundGeo = new THREE.PlaneGeometry(200, 200);
-    const groundMat = new THREE.MeshStandardMaterial({ color: 0x0b0b10 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    scene.add(ground);
-  }
-  createTrack();
-
-  // ====== CARS ======
-  const carSize = { w: 1.5, h: 0.8, l: 3 };
-  const myCarColor = 0x00ffcc;
-  const otherCarColor = 0xff3366;
-
-  function createCar(color) {
-    const geo = new THREE.BoxGeometry(carSize.w, carSize.h, carSize.l);
-    const mat = new THREE.MeshStandardMaterial({ color });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(0, carSize.h / 2, -18);
+  segments.forEach(s => {
+    const geo = new THREE.BoxGeometry(s.w, 0.5, s.h);
+    const mesh = new THREE.Mesh(geo, trackMaterial);
+    mesh.position.set(s.x, 0, s.z);
     scene.add(mesh);
-    return mesh;
-  }
-
-  const myCar = createCar(myCarColor);
-  const otherCars = {}; // peerId -> mesh
-
-  let keys = {};
-  window.addEventListener('keydown', e => { keys[e.code] = true; });
-  window.addEventListener('keyup', e => { keys[e.code] = false; });
-
-  let speed = 0;
-  let maxSpeed = 0.25;
-  let accel = 0.005;
-  let friction = 0.003;
-  let turnSpeed = 0.04;
-
-  function updateCar(dt) {
-    // Forward/back
-    if (keys['KeyW'] || keys['ArrowUp']) {
-      speed += accel;
-    } else if (keys['KeyS'] || keys['ArrowDown']) {
-      speed -= accel;
-    } else {
-      // friction
-      if (speed > 0) speed = Math.max(0, speed - friction);
-      else if (speed < 0) speed = Math.min(0, speed + friction);
-    }
-    speed = Math.max(-maxSpeed * 0.5, Math.min(maxSpeed, speed));
-
-    // Turn
-    if (keys['KeyA'] || keys['ArrowLeft']) {
-      myCar.rotation.y += turnSpeed * (speed >= 0 ? 1 : -1);
-    }
-    if (keys['KeyD'] || keys['ArrowRight']) {
-      myCar.rotation.y -= turnSpeed * (speed >= 0 ? 1 : -1);
-    }
-
-    // Move
-    const dir = new THREE.Vector3(0, 0, 1);
-    dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), myCar.rotation.y);
-    myCar.position.addScaledVector(dir, speed * dt * 60);
-
-    // Keep camera loosely behind car
-    const camOffset = dir.clone().multiplyScalar(-10);
-    camOffset.y = 6;
-    camera.position.copy(myCar.position.clone().add(camOffset));
-    controls.target.copy(myCar.position);
-    controls.update();
-  }
-
-  // ====== PEERJS MULTIPLAYER ======
-  const statusEl = document.getElementById('status');
-  const hostBtn = document.getElementById('hostBtn');
-  const joinBtn = document.getElementById('joinBtn');
-
-  let peer = null;
-  let connections = []; // for host: list of DataConnections
-  let conn = null;      // for client: single DataConnection
-  let isHost = false;
-
-  function setStatus(msg) {
-    statusEl.textContent = msg;
-    console.log(msg);
-  }
-
-  function initPeer() {
-    if (peer) return;
-    peer = new Peer(); // uses default PeerServer (cloud) by PeerJS
-    peer.on('open', id => {
-      console.log('My peer ID:', id);
-      if (isHost) {
-        setStatus('Hosting. Share ID: ' + id);
-      } else {
-        setStatus('Connected as client. My ID: ' + id);
-      }
-    });
-
-    peer.on('connection', c => {
-      // Host receives connections
-      if (!isHost) return;
-      setStatus('Client connected: ' + c.peer);
-      connections.push(c);
-      setupConnectionHandlers(c);
-    });
-
-    peer.on('error', err => {
-      console.error(err);
-      setStatus('Peer error: ' + err.type);
-    });
-  }
-
-  function setupConnectionHandlers(c) {
-    c.on('data', data => {
-      // Data from client or host
-      if (data.type === 'state') {
-        // Update other car
-        let car = otherCars[c.peer];
-        if (!car) {
-          car = createCar(otherCarColor);
-          otherCars[c.peer] = car;
-        }
-        car.position.set(data.x, data.y, data.z);
-        car.rotation.y = data.rotY;
-      }
-    });
-
-    c.on('close', () => {
-      setStatus('Connection closed: ' + c.peer);
-      if (otherCars[c.peer]) {
-        scene.remove(otherCars[c.peer]);
-        delete otherCars[c.peer];
-      }
-      connections = connections.filter(cc => cc !== c);
-    });
-  }
-
-  hostBtn.onclick = () => {
-    isHost = true;
-    initPeer();
-    setStatus('Starting host...');
-  };
-
-  joinBtn.onclick = () => {
-    isHost = false;
-    initPeer();
-    const hostId = prompt('Enter host peer ID:');
-    if (!hostId) return;
-    conn = peer.connect(hostId);
-    conn.on('open', () => {
-      setStatus('Connected to host: ' + hostId);
-      setupConnectionHandlers(conn);
-    });
-  };
-
-  // Broadcast my state (host or client) to others
-  function sendMyState() {
-    const data = {
-      type: 'state',
-      x: myCar.position.x,
-      y: myCar.position.y,
-      z: myCar.position.z,
-      rotY: myCar.rotation.y
-    };
-
-    if (isHost) {
-      // Host sends to all clients
-      connections.forEach(c => {
-        if (c.open) c.send(data);
-      });
-    } else if (conn && conn.open) {
-      // Client sends to host
-      conn.send(data);
-    }
-  }
-
-  // ====== MAIN LOOP ======
-  let lastTime = performance.now();
-  function animate(now) {
-    requestAnimationFrame(animate);
-    const dt = (now - lastTime) / 1000;
-    lastTime = now;
-
-    updateCar(dt);
-    sendMyState();
-
-    renderer.render(scene, camera);
-  }
-  animate(lastTime);
-
-  window.addEventListener('resize', () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
   });
+
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(200, 200),
+    new THREE.MeshStandardMaterial({ color: 0x0b0b10 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+}
+createTrack();
+
+/* ============================================================
+   CARS
+============================================================ */
+const carSize = { w: 1.5, h: 0.8, l: 3 };
+const myCarColor = 0x00ffcc;
+const otherCarColor = 0xff3366;
+
+function createCar(color) {
+  const geo = new THREE.BoxGeometry(carSize.w, carSize.h, carSize.l);
+  const mat = new THREE.MeshStandardMaterial({ color });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(0, carSize.h / 2, -18);
+  scene.add(mesh);
+  return mesh;
+}
+
+const myCar = createCar(myCarColor);
+const otherCars = {};
+
+let keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+let speed = 0;
+let maxSpeed = 0.25;
+let accel = 0.005;
+let friction = 0.003;
+let turnSpeed = 0.04;
+
+function updateCar(dt) {
+  if (keys['KeyW'] || keys['ArrowUp']) speed += accel;
+  else if (keys['KeyS'] || keys['ArrowDown']) speed -= accel;
+  else {
+    if (speed > 0) speed = Math.max(0, speed - friction);
+    else if (speed < 0) speed = Math.min(0, speed + friction);
+  }
+
+  speed = Math.max(-maxSpeed * 0.5, Math.min(maxSpeed, speed));
+
+  if (keys['KeyA'] || keys['ArrowLeft']) myCar.rotation.y += turnSpeed * (speed >= 0 ? 1 : -1);
+  if (keys['KeyD'] || keys['ArrowRight']) myCar.rotation.y -= turnSpeed * (speed >= 0 ? 1 : -1);
+
+  const dir = new THREE.Vector3(0, 0, 1);
+  dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), myCar.rotation.y);
+  myCar.position.addScaledVector(dir, speed * dt * 60);
+
+  const camOffset = dir.clone().multiplyScalar(-10);
+  camOffset.y = 6;
+  camera.position.copy(myCar.position.clone().add(camOffset));
+  controls.target.copy(myCar.position);
+  controls.update();
+}
+
+/* ============================================================
+   FIXED MULTIPLAYER
+============================================================ */
+const statusEl = document.getElementById('status');
+const hostBtn = document.getElementById('hostBtn');
+const joinBtn = document.getElementById('joinBtn');
+
+let peer = null;
+let isHost = false;
+let hostConnections = {};
+let clientConnection = null;
+
+function setStatus(msg) {
+  statusEl.textContent = msg;
+  console.log(msg);
+}
+
+function initPeer() {
+  if (peer) return;
+
+  peer = new Peer();
+
+  peer.on("open", id => {
+    console.log("My peer ID:", id);
+    setStatus(isHost ? "Hosting. Share ID: " + id : "Client ready. My ID: " + id);
+  });
+
+  peer.on("connection", conn => {
+    if (!isHost) return;
+
+    console.log("Client connected:", conn.peer);
+    hostConnections[conn.peer] = conn;
+    setupConnectionHandlers(conn);
+
+    for (let pid in otherCars) {
+      const car = otherCars[pid];
+      conn.send({
+        type: "spawn",
+        peer: pid,
+        x: car.position.x,
+        y: car.position.y,
+        z: car.position.z,
+        rotY: car.rotation.y
+      });
+    }
+  });
+
+  peer.on("error", err => {
+    console.error(err);
+    setStatus("Peer error: " + err.type);
+  });
+}
+
+function setupConnectionHandlers(conn) {
+  conn.on("data", data => {
+    if (data.type === "state") {
+      let car = otherCars[data.peer];
+      if (!car) {
+        car = createCar(otherCarColor);
+        otherCars[data.peer] = car;
+      }
+      car.position.set(data.x, data.y, data.z);
+      car.rotation.y = data.rotY;
+
+      if (isHost) {
+        for (let pid in hostConnections) {
+          if (pid !== data.peer) hostConnections[pid].send(data);
+        }
+      }
+    }
+
+    if (data.type === "spawn") {
+      let car = otherCars[data.peer];
+      if (!car) {
+        car = createCar(otherCarColor);
+        otherCars[data.peer] = car;
+      }
+      car.position.set(data.x, data.y, data.z);
+      car.rotation.y = data.rotY;
+    }
+  });
+
+  conn.on("close", () => {
+    if (otherCars[conn.peer]) {
+      scene.remove(otherCars[conn.peer]);
+      delete otherCars[conn.peer];
+    }
+    delete hostConnections[conn.peer];
+  });
+}
+
+hostBtn.onclick = () => {
+  isHost = true;
+  initPeer();
+  setStatus("Starting host...");
+};
+
+joinBtn.onclick = () => {
+  isHost = false;
+  initPeer();
+
+  const hostId = prompt("Enter host peer ID:");
+  if (!hostId) return;
+
+  clientConnection = peer.connect(hostId);
+
+  clientConnection.on("open", () => {
+    setStatus("Connected to host");
+    setupConnectionHandlers(clientConnection);
+  });
+};
+
+function sendMyState() {
+  if (!peer) return;
+
+  const data = {
+    type: "state",
+    peer: peer.id,
+    x: myCar.position.x,
+    y: myCar.position.y,
+    z: myCar.position.z,
+    rotY: myCar.rotation.y
+  };
+
+  if (isHost) {
+    for (let pid in hostConnections) hostConnections[pid].send(data);
+  } else if (clientConnection && clientConnection.open) {
+    clientConnection.send(data);
+  }
+}
+
+/* ============================================================
+   MAIN LOOP
+============================================================ */
+let lastTime = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+
+  updateCar(dt);
+  sendMyState();
+
+  renderer.render(scene, camera);
+}
+animate(lastTime);
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
 </script>
 </body>
 </html>
+
