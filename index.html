@@ -1,290 +1,159 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>3D Racing Game + PeerJS Multiplayer</title>
-  <style>
-    body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: sans-serif; }
-    #ui {
-      position: absolute; top: 10px; left: 10px; z-index: 10;
-      background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 4px;
-      font-size: 14px;
-    }
-    #ui button { margin-right: 6px; }
-  </style>
+<meta charset="UTF-8">
+<title>Multiplayer Car Builder + PeerJS</title>
+<style>
+  body { font-family: Arial; background:#222; color:white; }
+  #builder, #network, #game { margin:20px; padding:20px; background:#333; border-radius:10px; }
+  canvas { background:#111; width:600px; height:400px; border:2px solid white; }
+</style>
 </head>
 <body>
-<div id="ui">
-  <button id="hostBtn">Host</button>
-  <button id="joinBtn">Join</button>
-  <span id="status">Not connected</span>
-</div>
-<canvas id="c"></canvas>
 
-<!-- Three.js (last version with global THREE + OrbitControls support) -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js"></script>
+<h1>Multiplayer Car Builder + PeerJS</h1>
+
+<!-- CAR BUILDER -->
+<div id="builder">
+  <h2>Build Your Car</h2>
+  <label>Color: <input type="color" id="carColor" value="#ff0000"></label><br><br>
+  <label>Max Speed: <input type="number" id="maxSpeed" value="5"></label><br><br>
+  <label>Acceleration: <input type="number" id="accel" value="0.2"></label><br><br>
+  <button id="saveCar">Save Car</button>
+  <p id="carSaved"></p>
+</div>
+
+<!-- NETWORK -->
+<div id="network">
+  <h2>Multiplayer</h2>
+  <button id="hostBtn">Host Game</button>
+  <button id="joinBtn">Join Game</button>
+  <p id="roomInfo"></p>
+</div>
+
+<!-- GAME -->
+<div id="game">
+  <h2>Race</h2>
+  <canvas id="canvas" width="600" height="400"></canvas><br>
+  <button id="startRace">Start Race</button>
+</div>
 
 <!-- PeerJS -->
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
 <script>
-/* ============================================================
-   THREE.JS SETUP
-============================================================ */
-const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x202030);
-
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 15, 25);
-
-const controls = new THREE.OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0, 0);
-controls.update();
-
-// Lights
-scene.add(new THREE.AmbientLight(0xffffff, 0.4));
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(10, 20, 10);
-scene.add(dirLight);
-
-// Track
-function createTrack() {
-  const trackMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-
-  const segments = [
-    { x: 0, z: -20, w: 20, h: 4 },
-    { x: 20, z: 0, w: 4, h: 40 },
-    { x: 0, z: 20, w: 20, h: 4 },
-    { x: -20, z: 0, w: 4, h: 40 },
-  ];
-
-  segments.forEach(s => {
-    const geo = new THREE.BoxGeometry(s.w, 0.5, s.h);
-    const mesh = new THREE.Mesh(geo, trackMaterial);
-    mesh.position.set(s.x, 0, s.z);
-    scene.add(mesh);
-  });
-
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(200, 200),
-    new THREE.MeshStandardMaterial({ color: 0x0b0b10 })
-  );
-  ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
-}
-createTrack();
-
-/* ============================================================
-   CARS
-============================================================ */
-const carSize = { w: 1.5, h: 0.8, l: 3 };
-const myCarColor = 0x00ffcc;
-const otherCarColor = 0xff3366;
-
-function createCar(color) {
-  const geo = new THREE.BoxGeometry(carSize.w, carSize.h, carSize.l);
-  const mat = new THREE.MeshStandardMaterial({ color });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(0, carSize.h / 2, -18);
-  scene.add(mesh);
-  return mesh;
-}
-
-const myCar = createCar(myCarColor);
-const otherCars = {};
-
-let keys = {};
-window.addEventListener('keydown', e => keys[e.code] = true);
-window.addEventListener('keyup', e => keys[e.code] = false);
-
-let speed = 0;
-let maxSpeed = 0.25;
-let accel = 0.005;
-let friction = 0.003;
-let turnSpeed = 0.04;
-
-function updateCar(dt) {
-  if (keys['KeyW'] || keys['ArrowUp']) speed += accel;
-  else if (keys['KeyS'] || keys['ArrowDown']) speed -= accel;
-  else {
-    if (speed > 0) speed = Math.max(0, speed - friction);
-    else if (speed < 0) speed = Math.min(0, speed + friction);
-  }
-
-  speed = Math.max(-maxSpeed * 0.5, Math.min(maxSpeed, speed));
-
-  if (keys['KeyA'] || keys['ArrowLeft']) myCar.rotation.y += turnSpeed * (speed >= 0 ? 1 : -1);
-  if (keys['KeyD'] || keys['ArrowRight']) myCar.rotation.y -= turnSpeed * (speed >= 0 ? 1 : -1);
-
-  const dir = new THREE.Vector3(0, 0, 1);
-  dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), myCar.rotation.y);
-  myCar.position.addScaledVector(dir, speed * dt * 60);
-
-  const camOffset = dir.clone().multiplyScalar(-10);
-  camOffset.y = 6;
-  camera.position.copy(myCar.position.clone().add(camOffset));
-  controls.target.copy(myCar.position);
-  controls.update();
-}
-
-/* ============================================================
-   FIXED MULTIPLAYER
-============================================================ */
-const statusEl = document.getElementById('status');
-const hostBtn = document.getElementById('hostBtn');
-const joinBtn = document.getElementById('joinBtn');
-
-let peer = null;
+let myCar = null;
+let peer, conn;
+let connections = [];
+let allCars = {};
 let isHost = false;
-let hostConnections = {};
-let clientConnection = null;
 
-function setStatus(msg) {
-  statusEl.textContent = msg;
-  console.log(msg);
-}
+// CANVAS SETUP
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-function initPeer() {
-  if (peer) return;
+// PLAYER POSITION
+let myX = 50, myY = 200, vel = 0;
 
+// SAVE CAR
+document.getElementById("saveCar").onclick = () => {
+  myCar = {
+    id: crypto.randomUUID(),
+    color: document.getElementById("carColor").value,
+    maxSpeed: Number(document.getElementById("maxSpeed").value),
+    accel: Number(document.getElementById("accel").value)
+  };
+  document.getElementById("carSaved").innerText = "Car saved!";
+};
+
+// HOST GAME
+document.getElementById("hostBtn").onclick = () => {
+  isHost = true;
   peer = new Peer();
 
   peer.on("open", id => {
-    console.log("My peer ID:", id);
-    setStatus(isHost ? "Hosting. Share ID: " + id : "Client ready. My ID: " + id);
+    document.getElementById("roomInfo").innerText = "Room Code: " + id;
   });
 
-  peer.on("connection", conn => {
-    if (!isHost) return;
-
-    console.log("Client connected:", conn.peer);
-    hostConnections[conn.peer] = conn;
-    setupConnectionHandlers(conn);
-
-    for (let pid in otherCars) {
-      const car = otherCars[pid];
-      conn.send({
-        type: "spawn",
-        peer: pid,
-        x: car.position.x,
-        y: car.position.y,
-        z: car.position.z,
-        rotY: car.rotation.y
-      });
-    }
-  });
-
-  peer.on("error", err => {
-    console.error(err);
-    setStatus("Peer error: " + err.type);
-  });
-}
-
-function setupConnectionHandlers(conn) {
-  conn.on("data", data => {
-    if (data.type === "state") {
-      let car = otherCars[data.peer];
-      if (!car) {
-        car = createCar(otherCarColor);
-        otherCars[data.peer] = car;
-      }
-      car.position.set(data.x, data.y, data.z);
-      car.rotation.y = data.rotY;
-
-      if (isHost) {
-        for (let pid in hostConnections) {
-          if (pid !== data.peer) hostConnections[pid].send(data);
-        }
-      }
-    }
-
-    if (data.type === "spawn") {
-      let car = otherCars[data.peer];
-      if (!car) {
-        car = createCar(otherCarColor);
-        otherCars[data.peer] = car;
-      }
-      car.position.set(data.x, data.y, data.z);
-      car.rotation.y = data.rotY;
-    }
-  });
-
-  conn.on("close", () => {
-    if (otherCars[conn.peer]) {
-      scene.remove(otherCars[conn.peer]);
-      delete otherCars[conn.peer];
-    }
-    delete hostConnections[conn.peer];
-  });
-}
-
-hostBtn.onclick = () => {
-  isHost = true;
-  initPeer();
-  setStatus("Starting host...");
-};
-
-joinBtn.onclick = () => {
-  isHost = false;
-  initPeer();
-
-  const hostId = prompt("Enter host peer ID:");
-  if (!hostId) return;
-
-  clientConnection = peer.connect(hostId);
-
-  clientConnection.on("open", () => {
-    setStatus("Connected to host");
-    setupConnectionHandlers(clientConnection);
+  peer.on("connection", c => {
+    connections.push(c);
+    c.on("data", handleData);
   });
 };
 
-function sendMyState() {
-  if (!peer) return;
+// JOIN GAME
+document.getElementById("joinBtn").onclick = () => {
+  const room = prompt("Enter room code");
+  peer = new Peer();
 
-  const data = {
-    type: "state",
-    peer: peer.id,
-    x: myCar.position.x,
-    y: myCar.position.y,
-    z: myCar.position.z,
-    rotY: myCar.rotation.y
-  };
+  peer.on("open", () => {
+    conn = peer.connect(room);
+    conn.on("open", () => {
+      conn.send({ type:"CAR_CONFIG", payload: myCar });
+    });
+    conn.on("data", handleData);
+  });
+};
 
-  if (isHost) {
-    for (let pid in hostConnections) hostConnections[pid].send(data);
-  } else if (clientConnection && clientConnection.open) {
-    clientConnection.send(data);
+// HANDLE NETWORK DATA
+function handleData(data) {
+  if (data.type === "CAR_CONFIG") {
+    allCars[data.payload.id] = { ...data.payload, x:50, y:Math.random()*350 };
+  }
+  if (data.type === "START_RACE") {
+    allCars = data.payload;
+  }
+  if (data.type === "CAR_STATE") {
+    if (allCars[data.payload.id]) {
+      allCars[data.payload.id].x = data.payload.x;
+      allCars[data.payload.id].y = data.payload.y;
+    }
   }
 }
 
-/* ============================================================
-   MAIN LOOP
-============================================================ */
-let lastTime = performance.now();
-function animate(now) {
-  requestAnimationFrame(animate);
-  const dt = (now - lastTime) / 1000;
-  lastTime = now;
-
-  updateCar(dt);
-  sendMyState();
-
-  renderer.render(scene, camera);
+// BROADCAST
+function broadcast(msg) {
+  connections.forEach(c => c.send(msg));
 }
-animate(lastTime);
 
-window.addEventListener('resize', () => {
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-});
+// START RACE
+document.getElementById("startRace").onclick = () => {
+  if (!isHost) return alert("Only host can start race");
+
+  allCars[myCar.id] = { ...myCar, x:50, y:200 };
+
+  broadcast({ type:"START_RACE", payload: allCars });
+};
+
+// GAME LOOP
+function gameLoop() {
+  ctx.clearRect(0,0,600,400);
+
+  // Move my car
+  if (myCar) {
+    vel = Math.min(vel + myCar.accel, myCar.maxSpeed);
+    myX += vel * 0.1;
+
+    // Send state
+    if (conn && conn.open) {
+      conn.send({ type:"CAR_STATE", payload:{ id:myCar.id, x:myX, y:myY } });
+    }
+    if (isHost) {
+      broadcast({ type:"CAR_STATE", payload:{ id:myCar.id, x:myX, y:myY } });
+    }
+  }
+
+  // Draw all cars
+  for (let id in allCars) {
+    const c = allCars[id];
+    ctx.fillStyle = c.color;
+    ctx.fillRect(c.x, c.y, 40, 20);
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
 </script>
+
 </body>
 </html>
-
