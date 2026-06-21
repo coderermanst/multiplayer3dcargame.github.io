@@ -2,158 +2,244 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Multiplayer Car Builder + PeerJS</title>
+<title>Multiplayer Block Car Builder + PeerJS</title>
 <style>
-  body { font-family: Arial; background:#222; color:white; }
-  #builder, #network, #game { margin:20px; padding:20px; background:#333; border-radius:10px; }
-  canvas { background:#111; width:600px; height:400px; border:2px solid white; }
+  body { font-family: Arial, background:#222; color:#fff; margin:0; padding:0; }
+  h1 { margin:20px; }
+  .panel { margin:20px; padding:15px; background:#333; border-radius:8px; }
+  #builderCanvas, #raceCanvas { background:#111; border:2px solid #fff; }
+  button { margin:5px 0; padding:6px 10px; }
+  label { display:block; margin:5px 0; }
 </style>
 </head>
 <body>
 
-<h1>Multiplayer Car Builder + PeerJS</h1>
+<h1>Multiplayer Block Car Builder + PeerJS</h1>
 
-<!-- CAR BUILDER -->
-<div id="builder">
-  <h2>Build Your Car</h2>
-  <label>Color: <input type="color" id="carColor" value="#ff0000"></label><br><br>
-  <label>Max Speed: <input type="number" id="maxSpeed" value="5"></label><br><br>
-  <label>Acceleration: <input type="number" id="accel" value="0.2"></label><br><br>
-  <button id="saveCar">Save Car</button>
-  <p id="carSaved"></p>
+<div class="panel">
+  <h2>1. Build your car (blocks)</h2>
+  <label>Block color: <input type="color" id="blockColor" value="#ff0000"></label>
+  <p>Click on the grid to toggle blocks on/off.</p>
+  <canvas id="builderCanvas" width="200" height="120"></canvas><br>
+  <button id="clearCar">Clear</button>
+  <p id="builderStatus"></p>
 </div>
 
-<!-- NETWORK -->
-<div id="network">
-  <h2>Multiplayer</h2>
+<div class="panel">
+  <h2>2. Multiplayer</h2>
   <button id="hostBtn">Host Game</button>
   <button id="joinBtn">Join Game</button>
   <p id="roomInfo"></p>
 </div>
 
-<!-- GAME -->
-<div id="game">
-  <h2>Race</h2>
-  <canvas id="canvas" width="600" height="400"></canvas><br>
-  <button id="startRace">Start Race</button>
+<div class="panel">
+  <h2>3. Race</h2>
+  <p>Use arrow keys to move. Both players see each other.</p>
+  <canvas id="raceCanvas" width="600" height="300"></canvas><br>
 </div>
 
-<!-- PeerJS -->
-<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
-let myCar = null;
-let peer, conn;
-let connections = [];
-let allCars = {};
+// ====== CAR BUILDER (BLOCKS) ======
+const builderCanvas = document.getElementById('builderCanvas');
+const bctx = builderCanvas.getContext('2d');
+const GRID_COLS = 10;
+const GRID_ROWS = 6;
+const CELL_W = builderCanvas.width / GRID_COLS;
+const CELL_H = builderCanvas.height / GRID_ROWS;
+
+// grid: true = block present
+let carGrid = Array.from({ length: GRID_ROWS }, () =>
+  Array.from({ length: GRID_COLS }, () => false)
+);
+
+function drawBuilder() {
+  bctx.clearRect(0,0,builderCanvas.width,builderCanvas.height);
+  // grid
+  bctx.strokeStyle = '#555';
+  for (let r=0; r<GRID_ROWS; r++) {
+    for (let c=0; c<GRID_COLS; c++) {
+      bctx.strokeRect(c*CELL_W, r*CELL_H, CELL_W, CELL_H);
+      if (carGrid[r][c]) {
+        bctx.fillStyle = document.getElementById('blockColor').value;
+        bctx.fillRect(c*CELL_W+1, r*CELL_H+1, CELL_W-2, CELL_H-2);
+      }
+    }
+  }
+}
+drawBuilder();
+
+builderCanvas.addEventListener('click', (e) => {
+  const rect = builderCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const c = Math.floor(x / CELL_W);
+  const r = Math.floor(y / CELL_H);
+  if (r>=0 && r<GRID_ROWS && c>=0 && c<GRID_COLS) {
+    carGrid[r][c] = !carGrid[r][c];
+    drawBuilder();
+    document.getElementById('builderStatus').textContent = 'Car updated.';
+  }
+});
+
+document.getElementById('clearCar').onclick = () => {
+  carGrid = Array.from({ length: GRID_ROWS }, () =>
+    Array.from({ length: GRID_COLS }, () => false)
+  );
+  drawBuilder();
+  document.getElementById('builderStatus').textContent = 'Car cleared.';
+};
+
+function getCarDesign() {
+  return {
+    grid: carGrid,
+    color: document.getElementById('blockColor').value
+  };
+}
+
+// ====== PEERJS SETUP ======
+let peer = null;
+let conn = null;      // single connection (2 players)
 let isHost = false;
 
-// CANVAS SETUP
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+document.getElementById('hostBtn').onclick = () => {
+  if (!peer) {
+    peer = new Peer();
+    isHost = true;
 
-// PLAYER POSITION
-let myX = 50, myY = 200, vel = 0;
-
-// SAVE CAR
-document.getElementById("saveCar").onclick = () => {
-  myCar = {
-    id: crypto.randomUUID(),
-    color: document.getElementById("carColor").value,
-    maxSpeed: Number(document.getElementById("maxSpeed").value),
-    accel: Number(document.getElementById("accel").value)
-  };
-  document.getElementById("carSaved").innerText = "Car saved!";
-};
-
-// HOST GAME
-document.getElementById("hostBtn").onclick = () => {
-  isHost = true;
-  peer = new Peer();
-
-  peer.on("open", id => {
-    document.getElementById("roomInfo").innerText = "Room Code: " + id;
-  });
-
-  peer.on("connection", c => {
-    connections.push(c);
-    c.on("data", handleData);
-  });
-};
-
-// JOIN GAME
-document.getElementById("joinBtn").onclick = () => {
-  const room = prompt("Enter room code");
-  peer = new Peer();
-
-  peer.on("open", () => {
-    conn = peer.connect(room);
-    conn.on("open", () => {
-      conn.send({ type:"CAR_CONFIG", payload: myCar });
+    peer.on('open', (id) => {
+      document.getElementById('roomInfo').textContent = 'Room code (give to friend): ' + id;
     });
-    conn.on("data", handleData);
+
+    peer.on('connection', (c) => {
+      conn = c;
+      setupConnection();
+    });
+  }
+};
+
+document.getElementById('joinBtn').onclick = () => {
+  const room = prompt('Enter room code:');
+  if (!room) return;
+  if (!peer) {
+    peer = new Peer();
+  }
+  peer.on('open', () => {
+    conn = peer.connect(room);
+    conn.on('open', () => {
+      setupConnection();
+      // send my car design
+      conn.send({ type: 'CAR_DESIGN', payload: getCarDesign() });
+    });
   });
 };
 
-// HANDLE NETWORK DATA
-function handleData(data) {
-  if (data.type === "CAR_CONFIG") {
-    allCars[data.payload.id] = { ...data.payload, x:50, y:Math.random()*350 };
-  }
-  if (data.type === "START_RACE") {
-    allCars = data.payload;
-  }
-  if (data.type === "CAR_STATE") {
-    if (allCars[data.payload.id]) {
-      allCars[data.payload.id].x = data.payload.x;
-      allCars[data.payload.id].y = data.payload.y;
-    }
+function setupConnection() {
+  document.getElementById('roomInfo').textContent += ' | Connected!';
+  conn.on('data', handleData);
+  // if host, send design when connection is ready
+  if (isHost) {
+    conn.send({ type: 'CAR_DESIGN', payload: getCarDesign() });
   }
 }
 
-// BROADCAST
-function broadcast(msg) {
-  connections.forEach(c => c.send(msg));
-}
+// ====== GAME / RACE ======
+const raceCanvas = document.getElementById('raceCanvas');
+const rctx = raceCanvas.getContext('2d');
 
-// START RACE
-document.getElementById("startRace").onclick = () => {
-  if (!isHost) return alert("Only host can start race");
-
-  allCars[myCar.id] = { ...myCar, x:50, y:200 };
-
-  broadcast({ type:"START_RACE", payload: allCars });
+// each player: { x, y, design }
+let myPlayer = {
+  x: 100,
+  y: 150,
+  design: getCarDesign()
+};
+let otherPlayer = {
+  x: 400,
+  y: 150,
+  design: null
 };
 
-// GAME LOOP
-function gameLoop() {
-  ctx.clearRect(0,0,600,400);
+let keys = {};
+window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
-  // Move my car
-  if (myCar) {
-    vel = Math.min(vel + myCar.accel, myCar.maxSpeed);
-    myX += vel * 0.1;
-
-    // Send state
-    if (conn && conn.open) {
-      conn.send({ type:"CAR_STATE", payload:{ id:myCar.id, x:myX, y:myY } });
-    }
-    if (isHost) {
-      broadcast({ type:"CAR_STATE", payload:{ id:myCar.id, x:myX, y:myY } });
-    }
+function handleData(data) {
+  if (data.type === 'CAR_DESIGN') {
+    otherPlayer.design = data.payload;
   }
-
-  // Draw all cars
-  for (let id in allCars) {
-    const c = allCars[id];
-    ctx.fillStyle = c.color;
-    ctx.fillRect(c.x, c.y, 40, 20);
+  if (data.type === 'POS') {
+    otherPlayer.x = data.payload.x;
+    otherPlayer.y = data.payload.y;
   }
-
-  requestAnimationFrame(gameLoop);
 }
-gameLoop();
-</script>
 
+function sendPosition() {
+  if (conn && conn.open) {
+    conn.send({ type: 'POS', payload: { x: myPlayer.x, y: myPlayer.y } });
+  }
+}
+
+function drawCar(ctx, x, y, design) {
+  if (!design) return;
+  const grid = design.grid;
+  const color = design.color;
+  const blockSize = 8; // size of each block in race canvas
+
+  ctx.fillStyle = color;
+  for (let r=0; r<grid.length; r++) {
+    for (let c=0; c<grid[0].length; c++) {
+      if (grid[r][c]) {
+        const bx = x + (c - GRID_COLS/2) * blockSize;
+        const by = y + (r - GRID_ROWS/2) * blockSize;
+        ctx.fillRect(bx, by, blockSize, blockSize);
+      }
+    }
+  }
+}
+
+function update() {
+  // constant speed movement with arrow keys
+  const speed = 2;
+  if (keys['ArrowUp']) myPlayer.y -= speed;
+  if (keys['ArrowDown']) myPlayer.y += speed;
+  if (keys['ArrowLeft']) myPlayer.x -= speed;
+  if (keys['ArrowRight']) myPlayer.x += speed;
+
+  // keep inside canvas
+  myPlayer.x = Math.max(20, Math.min(raceCanvas.width-20, myPlayer.x));
+  myPlayer.y = Math.max(20, Math.min(raceCanvas.height-20, myPlayer.y));
+
+  // send position
+  sendPosition();
+}
+
+function render() {
+  rctx.clearRect(0,0,raceCanvas.width,raceCanvas.height);
+  // background
+  rctx.fillStyle = '#050505';
+  rctx.fillRect(0,0,raceCanvas.width,raceCanvas.height);
+
+  // track border
+  rctx.strokeStyle = '#555';
+  rctx.strokeRect(10,10,raceCanvas.width-20,raceCanvas.height-20);
+
+  // draw players
+  drawCar(rctx, myPlayer.x, myPlayer.y, myPlayer.design);
+  drawCar(rctx, otherPlayer.x, otherPlayer.y, otherPlayer.design);
+}
+
+function loop() {
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+loop();
+
+// keep my design in sync if user edits blocks
+setInterval(() => {
+  myPlayer.design = getCarDesign();
+}, 500);
+
+</script>
 </body>
 </html>
