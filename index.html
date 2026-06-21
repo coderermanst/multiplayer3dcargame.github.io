@@ -21,9 +21,9 @@
 </div>
 <canvas id="c"></canvas>
 
-<!-- Three.js -->
-<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-<script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+<!-- Three.js (last version with global THREE + OrbitControls support) -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js"></script>
 
 <!-- PeerJS -->
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -55,7 +55,6 @@ scene.add(dirLight);
 // Track
 function createTrack() {
   const trackMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-  const borderMaterial = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
 
   const segments = [
     { x: 0, z: -20, w: 20, h: 4 },
@@ -288,4 +287,3 @@ window.addEventListener('resize', () => {
 </script>
 </body>
 </html>
-
