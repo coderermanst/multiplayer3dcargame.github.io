@@ -8,8 +8,9 @@
   h1 { margin:20px; }
   .panel { margin:20px; padding:15px; background:#333; border-radius:8px; }
   #builderCanvas, #raceCanvas { background:#111; border:2px solid #fff; }
-  button { margin:5px 0; padding:6px 10px; }
+  button { margin:5px 0; padding:6px 10px; cursor:pointer; }
   label { display:block; margin:5px 0; }
+  #roundInfo { margin-top:8px; font-weight:bold; }
 </style>
 </head>
 <body>
@@ -23,6 +24,7 @@
   <canvas id="builderCanvas" width="200" height="120"></canvas><br>
   <button id="clearCar">Clear</button>
   <p id="builderStatus"></p>
+  <p id="roundInfo"></p>
 </div>
 
 <div class="panel">
@@ -34,7 +36,7 @@
 
 <div class="panel">
   <h2>3. Race</h2>
-  <p>Use arrow keys to move. Both players see each other.</p>
+  <p>Arrows = move, Shift = boosters, E = shoot.</p>
   <canvas id="raceCanvas" width="600" height="300"></canvas><br>
 </div>
 
@@ -48,14 +50,12 @@ const GRID_ROWS = 6;
 const CELL_W = builderCanvas.width / GRID_COLS;
 const CELL_H = builderCanvas.height / GRID_ROWS;
 
-// grid: true = block present
 let carGrid = Array.from({ length: GRID_ROWS }, () =>
   Array.from({ length: GRID_COLS }, () => false)
 );
 
 function drawBuilder() {
   bctx.clearRect(0,0,builderCanvas.width,builderCanvas.height);
-  // grid
   bctx.strokeStyle = '#555';
   for (let r=0; r<GRID_ROWS; r++) {
     for (let c=0; c<GRID_COLS; c++) {
@@ -99,23 +99,23 @@ function getCarDesign() {
 
 // ====== PEERJS SETUP ======
 let peer = null;
-let conn = null;      // single connection (2 players)
+let conn = null;
 let isHost = false;
 
+const roomInfo = document.getElementById('roomInfo');
+
 document.getElementById('hostBtn').onclick = () => {
-  if (!peer) {
-    peer = new Peer();
-    isHost = true;
-
-    peer.on('open', (id) => {
-      document.getElementById('roomInfo').textContent = 'Room code (give to friend): ' + id;
-    });
-
-    peer.on('connection', (c) => {
-      conn = c;
-      setupConnection();
-    });
-  }
+  if (peer) return;
+  isHost = true;
+  peer = new Peer();
+  peer.on('open', (id) => {
+    roomInfo.textContent = 'Room code (give to friend): ' + id;
+  });
+  peer.on('connection', (c) => {
+    if (conn) { c.close(); return; }
+    conn = c;
+    setupConnection();
+  });
 };
 
 document.getElementById('joinBtn').onclick = () => {
@@ -128,16 +128,14 @@ document.getElementById('joinBtn').onclick = () => {
     conn = peer.connect(room);
     conn.on('open', () => {
       setupConnection();
-      // send my car design
       conn.send({ type: 'CAR_DESIGN', payload: getCarDesign() });
     });
   });
 };
 
 function setupConnection() {
-  document.getElementById('roomInfo').textContent += ' | Connected!';
+  roomInfo.textContent += ' | Connected!';
   conn.on('data', handleData);
-  // if host, send design when connection is ready
   if (isHost) {
     conn.send({ type: 'CAR_DESIGN', payload: getCarDesign() });
   }
@@ -147,21 +145,30 @@ function setupConnection() {
 const raceCanvas = document.getElementById('raceCanvas');
 const rctx = raceCanvas.getContext('2d');
 
-// each player: { x, y, design }
 let myPlayer = {
   x: 100,
   y: 150,
-  design: getCarDesign()
+  vx: 0,
+  vy: 0,
+  design: getCarDesign(),
+  facing: 1
 };
 let otherPlayer = {
   x: 400,
   y: 150,
-  design: null
+  vx: 0,
+  vy: 0,
+  design: null,
+  facing: -1
 };
 
 let keys = {};
 window.addEventListener('keydown', (e) => { keys[e.key] = true; });
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+// bullets
+let bullets = [];      // local bullets
+let otherBullets = []; // bullets from other player
 
 function handleData(data) {
   if (data.type === 'CAR_DESIGN') {
@@ -170,12 +177,30 @@ function handleData(data) {
   if (data.type === 'POS') {
     otherPlayer.x = data.payload.x;
     otherPlayer.y = data.payload.y;
+    otherPlayer.facing = data.payload.facing;
+  }
+  if (data.type === 'BULLET') {
+    otherBullets.push({
+      x: data.payload.x,
+      y: data.payload.y,
+      vx: data.payload.vx,
+      vy: data.payload.vy
+    });
   }
 }
 
 function sendPosition() {
   if (conn && conn.open) {
-    conn.send({ type: 'POS', payload: { x: myPlayer.x, y: myPlayer.y } });
+    conn.send({
+      type: 'POS',
+      payload: { x: myPlayer.x, y: myPlayer.y, facing: myPlayer.facing }
+    });
+  }
+}
+
+function sendBullet(b) {
+  if (conn && conn.open) {
+    conn.send({ type: 'BULLET', payload: b });
   }
 }
 
@@ -183,7 +208,7 @@ function drawCar(ctx, x, y, design) {
   if (!design) return;
   const grid = design.grid;
   const color = design.color;
-  const blockSize = 8; // size of each block in race canvas
+  const blockSize = 8;
 
   ctx.fillStyle = color;
   for (let r=0; r<grid.length; r++) {
@@ -197,49 +222,171 @@ function drawCar(ctx, x, y, design) {
   }
 }
 
+function updateBullets(list) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const b = list[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    if (b.x < 0 || b.x > raceCanvas.width || b.y < 0 || b.y > raceCanvas.height) {
+      list.splice(i, 1);
+    }
+  }
+}
+
+// boosters: any block in bottom row acts as booster
+function hasBoosterBlocks(design) {
+  if (!design) return false;
+  const grid = design.grid;
+  const r = GRID_ROWS - 1;
+  for (let c=0; c<GRID_COLS; c++) {
+    if (grid[r][c]) return true;
+  }
+  return false;
+}
+
+let boosterCooldown = 0;
+let boosterActiveTime = 0;
+
+// rounds & phases
+let currentRound = 1;
+const maxRounds = 5;
+let phase = 'build'; // 'build' or 'race'
+let phaseTime = 30;  // seconds
+const roundInfo = document.getElementById('roundInfo');
+
+function setPhase(p) {
+  phase = p;
+  if (phase === 'build') {
+    phaseTime = 30;
+    roundInfo.textContent = `Round ${currentRound}/${maxRounds} - BUILD (30s to change your car)`;
+  } else {
+    phaseTime = 30;
+    roundInfo.textContent = `Round ${currentRound}/${maxRounds} - RACE!`;
+  }
+}
+
+setPhase('build');
+
+function updateRound(dt) {
+  phaseTime -= dt;
+  if (phaseTime <= 0) {
+    if (phase === 'build') {
+      myPlayer.design = getCarDesign();
+      if (conn && conn.open) {
+        conn.send({ type: 'CAR_DESIGN', payload: myPlayer.design });
+      }
+      setPhase('race');
+    } else {
+      currentRound++;
+      if (currentRound > maxRounds) {
+        roundInfo.textContent = 'All rounds finished!';
+        phase = 'done';
+      } else {
+        setPhase('build');
+      }
+    }
+  }
+}
+
 function update() {
-  // constant speed movement with arrow keys
-  const speed = 2;
+  const dt = 1/60;
+
+  if (phase !== 'race') {
+    sendPosition();
+    return;
+  }
+
+  const baseSpeed = 2;
+  let speed = baseSpeed;
+
+  if (boosterCooldown > 0) boosterCooldown -= dt;
+  if (boosterActiveTime > 0) boosterActiveTime -= dt;
+
+  if (boosterActiveTime > 0) {
+    speed = 4;
+  }
+
   if (keys['ArrowUp']) myPlayer.y -= speed;
   if (keys['ArrowDown']) myPlayer.y += speed;
-  if (keys['ArrowLeft']) myPlayer.x -= speed;
-  if (keys['ArrowRight']) myPlayer.x += speed;
+  if (keys['ArrowLeft']) { myPlayer.x -= speed; myPlayer.facing = -1; }
+  if (keys['ArrowRight']) { myPlayer.x += speed; myPlayer.facing = 1; }
 
-  // keep inside canvas
+  if (keys['Shift'] && boosterCooldown <= 0 && hasBoosterBlocks(myPlayer.design)) {
+    boosterActiveTime = 1.0;
+    boosterCooldown = 3.0;
+  }
+
+  if (keys['e'] || keys['E']) {
+    if (!myPlayer._shootCooldown) myPlayer._shootCooldown = 0;
+    myPlayer._shootCooldown -= dt;
+    if (myPlayer._shootCooldown <= 0) {
+      myPlayer._shootCooldown = 0.3;
+      const bulletSpeed = 5;
+      const b = {
+        x: myPlayer.x,
+        y: myPlayer.y,
+        vx: myPlayer.facing * bulletSpeed,
+        vy: 0
+      };
+      bullets.push(b);
+      sendBullet(b);
+    }
+  } else {
+    if (myPlayer._shootCooldown) {
+      myPlayer._shootCooldown -= dt;
+    }
+  }
+
   myPlayer.x = Math.max(20, Math.min(raceCanvas.width-20, myPlayer.x));
   myPlayer.y = Math.max(20, Math.min(raceCanvas.height-20, myPlayer.y));
 
-  // send position
   sendPosition();
 }
 
 function render() {
   rctx.clearRect(0,0,raceCanvas.width,raceCanvas.height);
-  // background
   rctx.fillStyle = '#050505';
   rctx.fillRect(0,0,raceCanvas.width,raceCanvas.height);
 
-  // track border
   rctx.strokeStyle = '#555';
   rctx.strokeRect(10,10,raceCanvas.width-20,raceCanvas.height-20);
 
-  // draw players
   drawCar(rctx, myPlayer.x, myPlayer.y, myPlayer.design);
   drawCar(rctx, otherPlayer.x, otherPlayer.y, otherPlayer.design);
+
+  rctx.fillStyle = 'yellow';
+  bullets.forEach(b => {
+    rctx.fillRect(b.x-2, b.y-2, 4, 4);
+  });
+  rctx.fillStyle = 'orange';
+  otherBullets.forEach(b => {
+    rctx.fillRect(b.x-2, b.y-2, 4, 4);
+  });
 }
 
+let lastTime = performance.now();
 function loop() {
+  const now = performance.now();
+  const dtMs = now - lastTime;
+  lastTime = now;
+  const dt = dtMs / 1000;
+
+  if (phase !== 'done') {
+    updateRound(dt);
+  }
+
   update();
+  updateBullets(bullets);
+  updateBullets(otherBullets);
   render();
+
   requestAnimationFrame(loop);
 }
 loop();
 
-// keep my design in sync if user edits blocks
 setInterval(() => {
   myPlayer.design = getCarDesign();
 }, 500);
-
 </script>
 </body>
 </html>
