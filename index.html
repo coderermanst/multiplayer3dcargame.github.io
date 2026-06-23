@@ -1,27 +1,33 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Multiplayer Block Car Builder + PeerJS</title>
+<title>Multiplayer Block Car Battle</title>
 <style>
-  body { font-family: Arial, background:#222; color:#fff; margin:0; padding:0; }
+  body { font-family: Arial, sans-serif; background:#222; color:#fff; margin:0; padding:0; }
   h1 { margin:20px; }
   .panel { margin:20px; padding:15px; background:#333; border-radius:8px; }
   #builderCanvas, #raceCanvas { background:#111; border:2px solid #fff; }
-  button { margin:5px 0; padding:6px 10px; cursor:pointer; }
+  button { margin:5px 5px 5px 0; padding:6px 12px; cursor:pointer; }
   label { display:block; margin:5px 0; }
   #roundInfo { margin-top:8px; font-weight:bold; }
+  .block-type-btn.selected { border:2px solid #0ff; }
 </style>
 </head>
 <body>
 
-<h1>Multiplayer Block Car Builder + PeerJS</h1>
+<h1>Multiplayer Block Car Battle + PeerJS</h1>
 
 <div class="panel">
   <h2>1. Build your car (blocks)</h2>
   <label>Block color: <input type="color" id="blockColor" value="#ff0000"></label>
-  <p>Click on the grid to toggle blocks on/off.</p>
-  <canvas id="builderCanvas" width="200" height="120"></canvas><br>
+  <div>
+    <button class="block-type-btn" data-type="normal" id="btnNormal">Normal</button>
+    <button class="block-type-btn" data-type="booster" id="btnBooster">Booster</button>
+    <button class="block-type-btn" data-type="gun" id="btnGun">Gun</button>
+  </div>
+  <p>Click on the grid to place/remove blocks. Different colors per block.</p>
+  <canvas id="builderCanvas" width="400" height="240"></canvas><br>
   <button id="clearCar">Clear</button>
   <p id="builderStatus"></p>
   <p id="roundInfo"></p>
@@ -35,24 +41,46 @@
 </div>
 
 <div class="panel">
-  <h2>3. Race</h2>
+  <h2>3. Battle</h2>
   <p>Arrows = move, Shift = boosters, E = shoot.</p>
-  <canvas id="raceCanvas" width="600" height="300"></canvas><br>
+  <canvas id="raceCanvas" width="800" height="400"></canvas><br>
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
-// ====== CAR BUILDER (BLOCKS) ======
+// ===== PREVENT ARROW KEYS FROM SCROLLING =====
+window.addEventListener("keydown", function(e) {
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) {
+    e.preventDefault();
+  }
+}, { passive:false });
+
+// ===== BUILDER SETUP =====
 const builderCanvas = document.getElementById('builderCanvas');
 const bctx = builderCanvas.getContext('2d');
-const GRID_COLS = 10;
-const GRID_ROWS = 6;
+const GRID_COLS = 20;
+const GRID_ROWS = 12;
 const CELL_W = builderCanvas.width / GRID_COLS;
 const CELL_H = builderCanvas.height / GRID_ROWS;
 
+// grid[r][c] = { type: "normal"|"booster"|"gun", color: "#rrggbb" } or null
 let carGrid = Array.from({ length: GRID_ROWS }, () =>
-  Array.from({ length: GRID_COLS }, () => false)
+  Array.from({ length: GRID_COLS }, () => null)
 );
+
+let currentBlockType = "normal";
+
+const blockTypeButtons = document.querySelectorAll(".block-type-btn");
+function selectBlockType(type) {
+  currentBlockType = type;
+  blockTypeButtons.forEach(btn => {
+    btn.classList.toggle("selected", btn.dataset.type === type);
+  });
+}
+document.getElementById("btnNormal").onclick = () => selectBlockType("normal");
+document.getElementById("btnBooster").onclick = () => selectBlockType("booster");
+document.getElementById("btnGun").onclick = () => selectBlockType("gun");
+selectBlockType("normal");
 
 function drawBuilder() {
   bctx.clearRect(0,0,builderCanvas.width,builderCanvas.height);
@@ -60,9 +88,19 @@ function drawBuilder() {
   for (let r=0; r<GRID_ROWS; r++) {
     for (let c=0; c<GRID_COLS; c++) {
       bctx.strokeRect(c*CELL_W, r*CELL_H, CELL_W, CELL_H);
-      if (carGrid[r][c]) {
-        bctx.fillStyle = document.getElementById('blockColor').value;
+      const cell = carGrid[r][c];
+      if (cell) {
+        bctx.fillStyle = cell.color;
         bctx.fillRect(c*CELL_W+1, r*CELL_H+1, CELL_W-2, CELL_H-2);
+
+        // inner marker for special blocks
+        if (cell.type === "booster") {
+          bctx.fillStyle = "cyan";
+          bctx.fillRect(c*CELL_W+6, r*CELL_H+6, CELL_W-12, CELL_H-12);
+        } else if (cell.type === "gun") {
+          bctx.fillStyle = "yellow";
+          bctx.fillRect(c*CELL_W+6, r*CELL_H+6, CELL_W-12, CELL_H-12);
+        }
       }
     }
   }
@@ -76,7 +114,14 @@ builderCanvas.addEventListener('click', (e) => {
   const c = Math.floor(x / CELL_W);
   const r = Math.floor(y / CELL_H);
   if (r>=0 && r<GRID_ROWS && c>=0 && c<GRID_COLS) {
-    carGrid[r][c] = !carGrid[r][c];
+    if (carGrid[r][c]) {
+      carGrid[r][c] = null;
+    } else {
+      carGrid[r][c] = {
+        type: currentBlockType,
+        color: document.getElementById('blockColor').value
+      };
+    }
     drawBuilder();
     document.getElementById('builderStatus').textContent = 'Car updated.';
   }
@@ -84,20 +129,22 @@ builderCanvas.addEventListener('click', (e) => {
 
 document.getElementById('clearCar').onclick = () => {
   carGrid = Array.from({ length: GRID_ROWS }, () =>
-    Array.from({ length: GRID_COLS }, () => false)
+    Array.from({ length: GRID_COLS }, () => null)
   );
   drawBuilder();
   document.getElementById('builderStatus').textContent = 'Car cleared.';
 };
 
 function getCarDesign() {
+  // deep copy grid
+  const gridCopy = carGrid.map(row => row.map(cell => cell ? { ...cell } : null));
   return {
-    grid: carGrid,
+    grid: gridCopy,
     color: document.getElementById('blockColor').value
   };
 }
 
-// ====== PEERJS SETUP ======
+// ===== PEERJS SETUP =====
 let peer = null;
 let conn = null;
 let isHost = false;
@@ -114,21 +161,23 @@ document.getElementById('hostBtn').onclick = () => {
   peer.on('connection', (c) => {
     if (conn) { c.close(); return; }
     conn = c;
-    setupConnection();
+    conn.on('open', () => {
+      setupConnection();
+      sendCarDesign();
+    });
   });
 };
 
 document.getElementById('joinBtn').onclick = () => {
+  if (peer) return;
   const room = prompt('Enter room code:');
   if (!room) return;
-  if (!peer) {
-    peer = new Peer();
-  }
+  peer = new Peer();
   peer.on('open', () => {
     conn = peer.connect(room);
     conn.on('open', () => {
       setupConnection();
-      conn.send({ type: 'CAR_DESIGN', payload: getCarDesign() });
+      sendCarDesign();
     });
   });
 };
@@ -136,56 +185,44 @@ document.getElementById('joinBtn').onclick = () => {
 function setupConnection() {
   roomInfo.textContent += ' | Connected!';
   conn.on('data', handleData);
-  if (isHost) {
-    conn.send({ type: 'CAR_DESIGN', payload: getCarDesign() });
-  }
 }
 
-// ====== GAME / RACE ======
+// ===== GAME / BATTLE =====
 const raceCanvas = document.getElementById('raceCanvas');
 const rctx = raceCanvas.getContext('2d');
 
 let myPlayer = {
-  x: 100,
-  y: 150,
+  x: 200,
+  y: 200,
   vx: 0,
   vy: 0,
   design: getCarDesign(),
-  facing: 1
+  facing: 1,
+  health: 100,
+  _shootCooldown: 0
 };
 let otherPlayer = {
-  x: 400,
-  y: 150,
+  x: 600,
+  y: 200,
   vx: 0,
   vy: 0,
   design: null,
-  facing: -1
+  facing: -1,
+  health: 100
 };
 
 let keys = {};
 window.addEventListener('keydown', (e) => { keys[e.key] = true; });
-window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+window.addEventListener('keyup',   (e) => { keys[e.key] = false; });
 
 // bullets
-let bullets = [];      // local bullets
-let otherBullets = []; // bullets from other player
+let bullets = [];      // my bullets
+let otherBullets = []; // opponent bullets
 
-function handleData(data) {
-  if (data.type === 'CAR_DESIGN') {
-    otherPlayer.design = data.payload;
-  }
-  if (data.type === 'POS') {
-    otherPlayer.x = data.payload.x;
-    otherPlayer.y = data.payload.y;
-    otherPlayer.facing = data.payload.facing;
-  }
-  if (data.type === 'BULLET') {
-    otherBullets.push({
-      x: data.payload.x,
-      y: data.payload.y,
-      vx: data.payload.vx,
-      vy: data.payload.vy
-    });
+function sendCarDesign() {
+  if (conn && conn.open) {
+    myPlayer.design = getCarDesign();
+    conn.send({ type: 'CAR_DESIGN', payload: myPlayer.design });
   }
 }
 
@@ -193,7 +230,12 @@ function sendPosition() {
   if (conn && conn.open) {
     conn.send({
       type: 'POS',
-      payload: { x: myPlayer.x, y: myPlayer.y, facing: myPlayer.facing }
+      payload: {
+        x: myPlayer.x,
+        y: myPlayer.y,
+        facing: myPlayer.facing,
+        health: myPlayer.health
+      }
     });
   }
 }
@@ -204,141 +246,197 @@ function sendBullet(b) {
   }
 }
 
+function handleData(data) {
+  if (data.type === 'CAR_DESIGN') {
+    otherPlayer.design = data.payload;
+  } else if (data.type === 'POS') {
+    otherPlayer.x = data.payload.x;
+    otherPlayer.y = data.payload.y;
+    otherPlayer.facing = data.payload.facing;
+    otherPlayer.health = data.payload.health;
+  } else if (data.type === 'BULLET') {
+    otherBullets.push({ ...data.payload });
+  }
+}
+
 function drawCar(ctx, x, y, design) {
   if (!design) return;
   const grid = design.grid;
-  const color = design.color;
   const blockSize = 8;
 
-  ctx.fillStyle = color;
-  for (let r=0; r<grid.length; r++) {
-    for (let c=0; c<grid[0].length; c++) {
-      if (grid[r][c]) {
+  for (let r=0; r<GRID_ROWS; r++) {
+    for (let c=0; c<GRID_COLS; c++) {
+      const cell = grid[r][c];
+      if (cell) {
+        ctx.fillStyle = cell.color;
         const bx = x + (c - GRID_COLS/2) * blockSize;
         const by = y + (r - GRID_ROWS/2) * blockSize;
         ctx.fillRect(bx, by, blockSize, blockSize);
+
+        if (cell.type === "booster") {
+          ctx.fillStyle = "cyan";
+          ctx.fillRect(bx+2, by+2, blockSize-4, blockSize-4);
+        } else if (cell.type === "gun") {
+          ctx.fillStyle = "yellow";
+          ctx.fillRect(bx+2, by+2, blockSize-4, blockSize-4);
+        }
       }
     }
   }
 }
 
-function updateBullets(list) {
+function drawHealthBar(ctx, x, y, health) {
+  const width = 60;
+  const height = 6;
+  ctx.fillStyle = "red";
+  ctx.fillRect(x - width/2, y - 40, width, height);
+  ctx.fillStyle = "lime";
+  ctx.fillRect(x - width/2, y - 40, width * (health / 100), height);
+}
+
+function hasBoosterBlocks(design) {
+  if (!design) return false;
+  const grid = design.grid;
+  for (let r=0; r<GRID_ROWS; r++) {
+    for (let c=0; c<GRID_COLS; c++) {
+      if (grid[r][c] && grid[r][c].type === "booster") return true;
+    }
+  }
+  return false;
+}
+
+function hasGunBlocks(design) {
+  if (!design) return false;
+  const grid = design.grid;
+  for (let r=0; r<GRID_ROWS; r++) {
+    for (let c=0; c<GRID_COLS; c++) {
+      if (grid[r][c] && grid[r][c].type === "gun") return true;
+    }
+  }
+  return false;
+}
+
+function bulletHitCar(bullet, player) {
+  if (!player.design) return false;
+  const grid = player.design.grid;
+  const blockSize = 8;
+
+  for (let r=0; r<GRID_ROWS; r++) {
+    for (let c=0; c<GRID_COLS; c++) {
+      const cell = grid[r][c];
+      if (!cell) continue;
+      const bx = player.x + (c - GRID_COLS/2) * blockSize;
+      const by = player.y + (r - GRID_ROWS/2) * blockSize;
+
+      if (bullet.x > bx && bullet.x < bx + blockSize &&
+          bullet.y > by && bullet.y < by + blockSize) {
+
+        grid[r][c] = null; // remove block
+        player.health -= 10;
+        if (player.health < 0) player.health = 0;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function updateBullets(list, targetPlayer) {
   for (let i = list.length - 1; i >= 0; i--) {
     const b = list[i];
     b.x += b.vx;
     b.y += b.vy;
+
+    if (bulletHitCar(b, targetPlayer)) {
+      list.splice(i, 1);
+      continue;
+    }
+
     if (b.x < 0 || b.x > raceCanvas.width || b.y < 0 || b.y > raceCanvas.height) {
       list.splice(i, 1);
     }
   }
 }
 
-// boosters: any block in bottom row acts as booster
-function hasBoosterBlocks(design) {
-  if (!design) return false;
-  const grid = design.grid;
-  const r = GRID_ROWS - 1;
-  for (let c=0; c<GRID_COLS; c++) {
-    if (grid[r][c]) return true;
-  }
-  return false;
-}
-
-let boosterCooldown = 0;
-let boosterActiveTime = 0;
-
-// rounds & phases
+// ===== ROUNDS =====
 let currentRound = 1;
 const maxRounds = 5;
-let phase = 'build'; // 'build' or 'race'
+let phase = "build"; // "build", "race", "done"
 let phaseTime = 30;  // seconds
 const roundInfo = document.getElementById('roundInfo');
 
 function setPhase(p) {
   phase = p;
-  if (phase === 'build') {
+  if (phase === "build") {
     phaseTime = 30;
     roundInfo.textContent = `Round ${currentRound}/${maxRounds} - BUILD (30s to change your car)`;
-  } else {
+  } else if (phase === "race") {
     phaseTime = 30;
     roundInfo.textContent = `Round ${currentRound}/${maxRounds} - RACE!`;
+  } else {
+    roundInfo.textContent = `All rounds finished!`;
   }
 }
-
-setPhase('build');
+setPhase("build");
 
 function updateRound(dt) {
+  if (phase === "done") return;
   phaseTime -= dt;
   if (phaseTime <= 0) {
-    if (phase === 'build') {
+    if (phase === "build") {
       myPlayer.design = getCarDesign();
-      if (conn && conn.open) {
-        conn.send({ type: 'CAR_DESIGN', payload: myPlayer.design });
-      }
-      setPhase('race');
-    } else {
+      sendCarDesign();
+      myPlayer.health = 100;
+      otherPlayer.health = 100;
+      setPhase("race");
+    } else if (phase === "race") {
       currentRound++;
       if (currentRound > maxRounds) {
-        roundInfo.textContent = 'All rounds finished!';
-        phase = 'done';
+        phase = "done";
+        roundInfo.textContent = "All rounds finished!";
       } else {
-        setPhase('build');
+        setPhase("build");
       }
     }
   }
 }
 
-function update() {
-  const dt = 1/60;
+// ===== UPDATE & RENDER =====
+function update(dt) {
+  if (phase === "race") {
+    const accel = 0.4;
+    if (keys["ArrowLeft"]) { myPlayer.vx -= accel; myPlayer.facing = -1; }
+    if (keys["ArrowRight"]) { myPlayer.vx += accel; myPlayer.facing = 1; }
+    if (keys["ArrowUp"]) { myPlayer.vy -= accel; }
+    if (keys["ArrowDown"]) { myPlayer.vy += accel; }
 
-  if (phase !== 'race') {
-    sendPosition();
-    return;
-  }
-
-  const baseSpeed = 2;
-  let speed = baseSpeed;
-
-  if (boosterCooldown > 0) boosterCooldown -= dt;
-  if (boosterActiveTime > 0) boosterActiveTime -= dt;
-
-  if (boosterActiveTime > 0) {
-    speed = 4;
-  }
-
-  if (keys['ArrowUp']) myPlayer.y -= speed;
-  if (keys['ArrowDown']) myPlayer.y += speed;
-  if (keys['ArrowLeft']) { myPlayer.x -= speed; myPlayer.facing = -1; }
-  if (keys['ArrowRight']) { myPlayer.x += speed; myPlayer.facing = 1; }
-
-  if (keys['Shift'] && boosterCooldown <= 0 && hasBoosterBlocks(myPlayer.design)) {
-    boosterActiveTime = 1.0;
-    boosterCooldown = 3.0;
-  }
-
-  if (keys['e'] || keys['E']) {
-    if (!myPlayer._shootCooldown) myPlayer._shootCooldown = 0;
-    myPlayer._shootCooldown -= dt;
-    if (myPlayer._shootCooldown <= 0) {
-      myPlayer._shootCooldown = 0.3;
-      const bulletSpeed = 5;
-      const b = {
-        x: myPlayer.x,
-        y: myPlayer.y,
-        vx: myPlayer.facing * bulletSpeed,
-        vy: 0
-      };
-      bullets.push(b);
-      sendBullet(b);
+    if (keys["Shift"] && hasBoosterBlocks(myPlayer.design)) {
+      myPlayer.vx += myPlayer.facing * 0.5;
     }
-  } else {
-    if (myPlayer._shootCooldown) {
+
+    if (hasGunBlocks(myPlayer.design)) {
       myPlayer._shootCooldown -= dt;
+      if ((keys["e"] || keys["E"]) && myPlayer._shootCooldown <= 0) {
+        myPlayer._shootCooldown = 0.25;
+        const bullet = {
+          x: myPlayer.x,
+          y: myPlayer.y,
+          vx: myPlayer.facing * 6,
+          vy: 0
+        };
+        bullets.push(bullet);
+        sendBullet(bullet);
+      }
     }
-  }
 
-  myPlayer.x = Math.max(20, Math.min(raceCanvas.width-20, myPlayer.x));
-  myPlayer.y = Math.max(20, Math.min(raceCanvas.height-20, myPlayer.y));
+    myPlayer.x += myPlayer.vx;
+    myPlayer.y += myPlayer.vy;
+    myPlayer.vx *= 0.9;
+    myPlayer.vy *= 0.9;
+
+    myPlayer.x = Math.max(40, Math.min(raceCanvas.width-40, myPlayer.x));
+    myPlayer.y = Math.max(40, Math.min(raceCanvas.height-40, myPlayer.y));
+  }
 
   sendPosition();
 }
@@ -354,6 +452,9 @@ function render() {
   drawCar(rctx, myPlayer.x, myPlayer.y, myPlayer.design);
   drawCar(rctx, otherPlayer.x, otherPlayer.y, otherPlayer.design);
 
+  drawHealthBar(rctx, myPlayer.x, myPlayer.y, myPlayer.health);
+  drawHealthBar(rctx, otherPlayer.x, otherPlayer.y, otherPlayer.health);
+
   rctx.fillStyle = 'yellow';
   bullets.forEach(b => {
     rctx.fillRect(b.x-2, b.y-2, 4, 4);
@@ -362,6 +463,10 @@ function render() {
   otherBullets.forEach(b => {
     rctx.fillRect(b.x-2, b.y-2, 4, 4);
   });
+
+  rctx.fillStyle = "#fff";
+  rctx.font = "14px Arial";
+  rctx.fillText(`Phase: ${phase.toUpperCase()} | Time: ${Math.ceil(phaseTime)}s`, 20, 24);
 }
 
 let lastTime = performance.now();
@@ -371,22 +476,24 @@ function loop() {
   lastTime = now;
   const dt = dtMs / 1000;
 
-  if (phase !== 'done') {
-    updateRound(dt);
-  }
-
-  update();
-  updateBullets(bullets);
-  updateBullets(otherBullets);
+  updateRound(dt);
+  update(dt);
+  updateBullets(bullets, otherPlayer);
+  updateBullets(otherBullets, myPlayer);
   render();
 
   requestAnimationFrame(loop);
 }
 loop();
 
+// keep my design in sync while building
 setInterval(() => {
-  myPlayer.design = getCarDesign();
+  if (phase === "build") {
+    myPlayer.design = getCarDesign();
+    sendCarDesign();
+  }
 }, 500);
 </script>
 </body>
 </html>
+
