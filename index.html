@@ -12,6 +12,30 @@
   label { display:block; margin:5px 0; }
   #roundInfo { margin-top:8px; font-weight:bold; }
   .block-type-btn.selected { border:2px solid #0ff; }
+
+  /* Neon vaporwave winner banner (center overlay) */
+  #winnerBanner {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.9);
+    padding: 20px 40px;
+    background: radial-gradient(circle at top left, #ff00ff, #00ffff);
+    color: #fff;
+    font-size: 32px;
+    font-weight: 800;
+    text-shadow: 0 0 10px #ff00ff, 0 0 10px #00ffff;
+    border-radius: 12px;
+    box-shadow: 0 0 25px #ff00ff, 0 0 25px #00ffff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    z-index: 9999;
+  }
+  #winnerBanner.visible {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 </style>
 </head>
 <body>
@@ -45,6 +69,8 @@
   <p>Arrows = move, Shift = boosters, E = shoot.</p>
   <canvas id="raceCanvas" width="800" height="400"></canvas><br>
 </div>
+
+<div id="winnerBanner">ROUND WINNER: PLAYER 1</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
@@ -136,7 +162,6 @@ document.getElementById('clearCar').onclick = () => {
 };
 
 function getCarDesign() {
-  // deep copy grid
   const gridCopy = carGrid.map(row => row.map(cell => cell ? { ...cell } : null));
   return {
     grid: gridCopy,
@@ -157,6 +182,7 @@ document.getElementById('hostBtn').onclick = () => {
   peer = new Peer();
   peer.on('open', (id) => {
     roomInfo.textContent = 'Room code (give to friend): ' + id;
+    roundInfo.textContent = 'Waiting for player to join...';
   });
   peer.on('connection', (c) => {
     if (conn) { c.close(); return; }
@@ -164,6 +190,10 @@ document.getElementById('hostBtn').onclick = () => {
     conn.on('open', () => {
       setupConnection();
       sendCarDesign();
+      if (phase === "waiting") {
+        currentRound = 1;
+        setPhase("build");
+      }
     });
   });
 };
@@ -178,6 +208,10 @@ document.getElementById('joinBtn').onclick = () => {
     conn.on('open', () => {
       setupConnection();
       sendCarDesign();
+      if (phase === "waiting") {
+        currentRound = 1;
+        setPhase("build");
+      }
     });
   });
 };
@@ -215,9 +249,8 @@ let keys = {};
 window.addEventListener('keydown', (e) => { keys[e.key] = true; });
 window.addEventListener('keyup',   (e) => { keys[e.key] = false; });
 
-// bullets
-let bullets = [];      // my bullets
-let otherBullets = []; // opponent bullets
+let bullets = [];
+let otherBullets = [];
 
 function sendCarDesign() {
   if (conn && conn.open) {
@@ -331,7 +364,7 @@ function bulletHitCar(bullet, player) {
       if (bullet.x > bx && bullet.x < bx + blockSize &&
           bullet.y > by && bullet.y < by + blockSize) {
 
-        grid[r][c] = null; // remove block
+        grid[r][c] = null;
         player.health -= 10;
         if (player.health < 0) player.health = 0;
         return true;
@@ -361,26 +394,45 @@ function updateBullets(list, targetPlayer) {
 // ===== ROUNDS =====
 let currentRound = 1;
 const maxRounds = 5;
-let phase = "build"; // "build", "race", "done"
-let phaseTime = 30;  // seconds
+const BUILD_TIME = 30;
+const FIGHT_TIME = 120;
+let phase = "waiting"; // "waiting", "build", "race", "done"
+let phaseTime = 0;
 const roundInfo = document.getElementById('roundInfo');
 
 function setPhase(p) {
   phase = p;
-  if (phase === "build") {
-    phaseTime = 30;
+  if (phase === "waiting") {
+    phaseTime = 0;
+    roundInfo.textContent = 'Waiting for player to join...';
+  } else if (phase === "build") {
+    phaseTime = BUILD_TIME;
     roundInfo.textContent = `Round ${currentRound}/${maxRounds} - BUILD (30s to change your car)`;
+    myPlayer.health = 100;
+    otherPlayer.health = 100;
   } else if (phase === "race") {
-    phaseTime = 30;
-    roundInfo.textContent = `Round ${currentRound}/${maxRounds} - RACE!`;
+    phaseTime = FIGHT_TIME;
+    roundInfo.textContent = `Round ${currentRound}/${maxRounds} - FIGHT (120s)`;
   } else {
     roundInfo.textContent = `All rounds finished!`;
   }
 }
-setPhase("build");
+setPhase("waiting");
+
+const winnerBanner = document.getElementById('winnerBanner');
+let winnerBannerTimeout = null;
+
+function showWinnerBanner(text) {
+  winnerBanner.textContent = text;
+  winnerBanner.classList.add('visible');
+  if (winnerBannerTimeout) clearTimeout(winnerBannerTimeout);
+  winnerBannerTimeout = setTimeout(() => {
+    winnerBanner.classList.remove('visible');
+  }, 3000);
+}
 
 function updateRound(dt) {
-  if (phase === "done") return;
+  if (phase === "waiting" || phase === "done") return;
   phaseTime -= dt;
   if (phaseTime <= 0) {
     if (phase === "build") {
@@ -390,6 +442,18 @@ function updateRound(dt) {
       otherPlayer.health = 100;
       setPhase("race");
     } else if (phase === "race") {
+      let myH = myPlayer.health;
+      let otherH = otherPlayer.health;
+      let text;
+      if (myH > otherH) {
+        text = isHost ? `ROUND WINNER: HOST` : `ROUND WINNER: YOU`;
+      } else if (otherH > myH) {
+        text = isHost ? `ROUND WINNER: GUEST` : `ROUND WINNER: OPPONENT`;
+      } else {
+        text = `ROUND RESULT: DRAW`;
+      }
+      showWinnerBanner(text);
+
       currentRound++;
       if (currentRound > maxRounds) {
         phase = "done";
