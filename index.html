@@ -70,7 +70,7 @@
   <canvas id="raceCanvas" width="800" height="400"></canvas><br>
 </div>
 
-<div id="winnerBanner">ROUND WINNER: PLAYER 1</div>
+<div id="winnerBanner">ROUND WINNER</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
@@ -89,7 +89,6 @@ const GRID_ROWS = 12;
 const CELL_W = builderCanvas.width / GRID_COLS;
 const CELL_H = builderCanvas.height / GRID_ROWS;
 
-// grid[r][c] = { type: "normal"|"booster"|"gun", color: "#rrggbb" } or null
 let carGrid = Array.from({ length: GRID_ROWS }, () =>
   Array.from({ length: GRID_COLS }, () => null)
 );
@@ -119,7 +118,6 @@ function drawBuilder() {
         bctx.fillStyle = cell.color;
         bctx.fillRect(c*CELL_W+1, r*CELL_H+1, CELL_W-2, CELL_H-2);
 
-        // inner marker for special blocks
         if (cell.type === "booster") {
           bctx.fillStyle = "cyan";
           bctx.fillRect(c*CELL_W+6, r*CELL_H+6, CELL_W-12, CELL_H-12);
@@ -364,9 +362,10 @@ function bulletHitCar(bullet, player) {
       if (bullet.x > bx && bullet.x < bx + blockSize &&
           bullet.y > by && bullet.y < by + blockSize) {
 
-        grid[r][c] = null;
+        // No block removal, only health damage
         player.health -= 10;
         if (player.health < 0) player.health = 0;
+
         return true;
       }
     }
@@ -396,7 +395,7 @@ let currentRound = 1;
 const maxRounds = 5;
 const BUILD_TIME = 30;
 const FIGHT_TIME = 120;
-let phase = "waiting"; // "waiting", "build", "race", "done"
+let phase = "waiting";
 let phaseTime = 0;
 const roundInfo = document.getElementById('roundInfo');
 
@@ -407,7 +406,7 @@ function setPhase(p) {
     roundInfo.textContent = 'Waiting for player to join...';
   } else if (phase === "build") {
     phaseTime = BUILD_TIME;
-    roundInfo.textContent = `Round ${currentRound}/${maxRounds} - BUILD (30s to change your car)`;
+    roundInfo.textContent = `Round ${currentRound}/${maxRounds} - BUILD (30s)`;
     myPlayer.health = 100;
     otherPlayer.health = 100;
   } else if (phase === "race") {
@@ -431,8 +430,38 @@ function showWinnerBanner(text) {
   }, 3000);
 }
 
+function endRoundByHealth() {
+  let text;
+  if (myPlayer.health > otherPlayer.health) {
+    text = isHost ? `ROUND WINNER: HOST` : `ROUND WINNER: YOU`;
+  } else if (otherPlayer.health > myPlayer.health) {
+    text = isHost ? `ROUND WINNER: GUEST` : `ROUND WINNER: OPPONENT`;
+  } else {
+    text = `ROUND RESULT: DRAW`;
+  }
+
+  showWinnerBanner(text);
+
+  currentRound++;
+  if (currentRound > maxRounds) {
+    phase = "done";
+    roundInfo.textContent = "All rounds finished!";
+  } else {
+    setPhase("build");
+  }
+}
+
 function updateRound(dt) {
   if (phase === "waiting" || phase === "done") return;
+
+  if (phase === "race") {
+    // Instant KO check
+    if (myPlayer.health <= 0 || otherPlayer.health <= 0) {
+      endRoundByHealth();
+      return;
+    }
+  }
+
   phaseTime -= dt;
   if (phaseTime <= 0) {
     if (phase === "build") {
@@ -442,25 +471,7 @@ function updateRound(dt) {
       otherPlayer.health = 100;
       setPhase("race");
     } else if (phase === "race") {
-      let myH = myPlayer.health;
-      let otherH = otherPlayer.health;
-      let text;
-      if (myH > otherH) {
-        text = isHost ? `ROUND WINNER: HOST` : `ROUND WINNER: YOU`;
-      } else if (otherH > myH) {
-        text = isHost ? `ROUND WINNER: GUEST` : `ROUND WINNER: OPPONENT`;
-      } else {
-        text = `ROUND RESULT: DRAW`;
-      }
-      showWinnerBanner(text);
-
-      currentRound++;
-      if (currentRound > maxRounds) {
-        phase = "done";
-        roundInfo.textContent = "All rounds finished!";
-      } else {
-        setPhase("build");
-      }
+      endRoundByHealth();
     }
   }
 }
